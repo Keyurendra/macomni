@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/accuknox/omniscan/pkg/job"
 	"github.com/accuknox/omniscan/pkg/publisher"
 	"github.com/accuknox/omniscan/pkg/scanner"
+	"github.com/accuknox/omniscan/pkg/scanner/aiagent"
 	"github.com/accuknox/omniscan/pkg/util"
 )
 
@@ -157,6 +159,17 @@ func (j Job) scanMountPoint(ctx context.Context, mountpoint, vmURI string) (*job
 		slog.String("partition_name", mountpoint),
 		slog.String("os", osType),
 	)
+	catalogPath := filepath.Join(j.vulnDBDirectory, "aiagent", "aiagentscan.json")
+	catalog, err := aiagent.LoadCatalog(catalogPath)
+	if err != nil {
+		j.logger.WarnContext(
+			ctx,
+			"AI-agent catalog unavailable; continuing without AI-agent detection",
+			slog.String("path", catalogPath),
+			slog.Any("error", err),
+		)
+		catalog = nil
+	}
 	run := job.NewRun(job.RunConfig{
 		Logger:                           j.logger,
 		VulnScan:                         j.vulnScanEnabled,
@@ -165,6 +178,7 @@ func (j Job) scanMountPoint(ctx context.Context, mountpoint, vmURI string) (*job
 		ClusterID:                        j.clusterID,
 		ClusterName:                      j.clusterName,
 		VulnScanDBDir:                    j.vulnDBDirectory,
+		AIAgentCatalog:                   catalog,
 		MacOSVulnScan:                    true,
 		MacOSFeedURL:                     j.macOSFeedURL,
 		CRISockets:                       j.criSockets,

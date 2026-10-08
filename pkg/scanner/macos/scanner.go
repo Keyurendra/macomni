@@ -15,6 +15,7 @@ import (
 	"github.com/aquasecurity/trivy/pkg/cache"
 	"github.com/aquasecurity/trivy/pkg/commands/artifact"
 	"github.com/aquasecurity/trivy/pkg/dependency"
+	"github.com/aquasecurity/trivy/pkg/fanal/analyzer"
 	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/flag"
 	trivyTypes "github.com/aquasecurity/trivy/pkg/types"
@@ -144,6 +145,7 @@ func (s s) scanFS(ctx context.Context, mount string) (trivyTypes.Report, error) 
 	}
 
 	opts := flag.Options{
+		DisabledAnalyzers: []analyzer.Type{analyzer.TypePom},
 		GlobalOptions: flag.GlobalOptions{
 			Timeout:  12 * time.Hour,
 			CacheDir: cacheDir,

@@ -6,20 +6,26 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/accuknox/omniscan/pkg/scanner"
+	"github.com/accuknox/omniscan/pkg/scanner/aiagent"
 	"github.com/accuknox/omniscan/pkg/scanner/clamav"
 	"github.com/accuknox/omniscan/pkg/scanner/macos"
 	trivyScanner "github.com/accuknox/omniscan/pkg/scanner/trivy"
 	"github.com/accuknox/omniscan/pkg/scanner/trivy/container"
 	"github.com/accuknox/omniscan/pkg/scanner/trivy/rootfs"
+	"github.com/accuknox/omniscan/pkg/scanner/winfs"
 	"github.com/accuknox/omniscan/pkg/scanner/winvuln"
+
+	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 )
 
 type RunConfig struct {
 	Logger                           *slog.Logger
 	VulnScan                         bool
 	VulnScanDBDir                    string
+	AIAgentCatalog                   *aiagent.Catalog
 	MacOSVulnScan                    bool
 	MacOSFeedURL                     string
 	CRISockets                       []string
@@ -55,12 +61,55 @@ func NewRun(c RunConfig) Run {
 	return Run{RunConfig: c}
 }
 
+func enrichAIAgentDetections(
+	finding *trivyScanner.Result,
+	catalog *aiagent.Catalog,
+	roots []string,
+	osType string,
+) {
+	if finding == nil || catalog == nil {
+		return
+	}
+
+	packages := aiagent.PackageSignalsFromTrivyResults(finding.Results)
+	finding.AIAgentDetections = aiagent.Detect(catalog, roots, packages, osType)
+}
+
+func offlineWindowsTRResult(windowsFinding *winvuln.Result) (*trivyScanner.Result, error) {
+	if windowsFinding == nil || windowsFinding.ScanResult == nil {
+		return nil, errors.New("offline Windows scan result is empty")
+	}
+
+	return &trivyScanner.Result{
+		SchemaVersion: 2,
+		CreatedAt:     time.Now().UTC(),
+		ArtifactName:  windowsFinding.VMUri,
+		ArtifactType:  "rootfs",
+		Metadata: trivyScanner.Metadata{
+			OS:      &ftypes.OS{Family: ftypes.OSType("windows"), Name: windowsFinding.ScanResult.WindowsVersion},
+			VM:      trivyScanner.VMMetadata{URI: windowsFinding.VMUri, Platform: windowsFinding.Platform, OS: windowsFinding.OS},
+			Windows: windowsFinding.ScanResult,
+		},
+		Results: winfs.MSRCResults(windowsFinding),
+	}, nil
+}
+
 func (r Run) ScanMountPoint(ctx context.Context, os, mount, vmURI, platform string, pub scanner.Publish) (*RunResult, error) {
 	if r.MalwareScanTargetDirectory == "" {
 		r.MalwareScanTargetDirectory = mount
 	}
 
 	result := RunResult{OS: os}
+	var aiAgentRoots []string
+	if os == "windows" {
+		if r.OfflineWinVulnScan {
+			aiAgentRoots = []string{mount}
+		} else if roots, err := winfs.FixedDrives(); err == nil {
+			aiAgentRoots = roots
+		}
+	} else {
+		aiAgentRoots = aiagent.DiscoverRoots(mount, os)
+	}
 	trackedPub := func(ctx context.Context, f scanner.Findings) error {
 		if f == nil {
 			return nil
@@ -68,6 +117,12 @@ func (r Run) ScanMountPoint(ctx context.Context, os, mount, vmURI, platform stri
 		if tf, ok := f.(*trivyScanner.Result); ok {
 			tf.ClusterID = r.ClusterID
 			tf.ClusterName = r.ClusterName
+			enrichAIAgentDetections(
+				tf,
+				r.AIAgentCatalog,
+				aiAgentRoots,
+				os,
+			)
 		}
 		r.Logger.LogAttrs(
 			ctx,
@@ -137,8 +192,38 @@ func (r Run) ScanMountPoint(ctx context.Context, os, mount, vmURI, platform stri
 			os,
 		)
 		result.VulnScanError = err
-		if err == nil && finding != nil {
-			if err := trackedPub(ctx, finding); err != nil {
+		if err != nil || finding == nil {
+			if err == nil {
+				result.VulnScanError = errors.New("windows vulnerability scanner returned no result")
+			}
+			return &result, nil
+		}
+		if r.OfflineWinVulnScan {
+			windowsFinding, ok := finding.(*winvuln.Result)
+			if !ok {
+				result.VulnScanError = fmt.Errorf("unexpected offline Windows scan result %T", finding)
+				return &result, nil
+			}
+			converted, err := offlineWindowsTRResult(windowsFinding)
+			if err != nil {
+				result.VulnScanError = err
+				return &result, nil
+			}
+			if err := trackedPub(ctx, converted); err != nil {
+				return &result, nil
+			}
+			return &result, nil
+		}
+		r.Logger.LogAttrs(ctx, slog.LevelInfo, "running Windows filesystem vulnerability scan")
+		windowsFinding, ok := finding.(*winvuln.Result)
+		if !ok {
+			result.VulnScanError = fmt.Errorf("unexpected Windows scan result %T", finding)
+			return &result, nil
+		}
+		combined, err := (winfs.Scanner{CacheDir: r.VulnScanDBDir}).Collect(ctx, vmURI, platform, windowsFinding)
+		result.VulnScanError = err
+		if err == nil {
+			if err := trackedPub(ctx, combined); err != nil {
 				return &result, nil
 			}
 		}

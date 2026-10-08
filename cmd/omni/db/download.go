@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	vulnDBVersion   = "2"
-	javaDBVersion   = "1"
-	msrcDBVersion   = "v1"
-	clamavDBVersion = "latest"
+	vulnDBVersion    = "2"
+	javaDBVersion    = "1"
+	msrcDBVersion    = "v1"
+	clamavDBVersion  = "latest"
+	aiagentDBVersion = "v1"
 )
 
 var downloadCmd = &cli.Command{
@@ -58,6 +59,11 @@ var downloadCmd = &cli.Command{
 			Value:  "public.ecr.aws/k9v9d5v2/clamav-db",
 			Config: cli.StringConfig{TrimSpace: true},
 		},
+		&cli.StringFlag{
+			Name:   "aiagent-db-repository",
+			Value:  "public.ecr.aws/k9v9d5v2/accuknox-omni-aiagent-db",
+			Config: cli.StringConfig{TrimSpace: true},
+		},
 		&cli.BoolFlag{
 			Name:  "force",
 			Value: false,
@@ -82,10 +88,10 @@ var downloadCmd = &cli.Command{
 	Arguments: []cli.Argument{
 		&cli.StringArgs{
 			Name:      "databases",
-			Max:       4,
+			Max:       5,
 			Min:       1,
 			Config:    cli.StringConfig{TrimSpace: true},
-			UsageText: "[vuln java msrc clamav]",
+			UsageText: "[vuln java msrc clamav aiagent]",
 		},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -98,6 +104,7 @@ var downloadCmd = &cli.Command{
 		javaDBRepo := c.String("java-db-repository")
 		msrcDBRepo := c.String("msrc-db-repository")
 		clamavDBRepo := c.String("clamav-db-repository")
+		aiagentDBRepo := c.String("aiagent-db-repository")
 		cacheDir := c.String("destination")
 		force := c.Bool("force")
 		skipTLSVerification := c.Bool("skip-tls-verification")
@@ -209,6 +216,40 @@ var downloadCmd = &cli.Command{
 				if err != nil {
 					return err
 				}
+
+			case "aiagent":
+				needsUpdate, err := needsUpdate(cacheDir, database)
+				if err != nil {
+					return fmt.Errorf("determining if an update is needed: %w", err)
+				}
+				if !needsUpdate && !force {
+					slog.LogAttrs(
+						ctx,
+						slog.LevelInfo,
+						"aiagent db is fairly recent. Skipping...",
+					)
+					continue
+				}
+
+				dst := filepath.Join(cacheDir, "aiagent")
+				if err := os.MkdirAll(dst, 0o755); err != nil {
+					return fmt.Errorf("creating directory %s: %w", dst, err)
+				}
+
+				err = download(
+					ctx,
+					aiagentDBRepo,
+					aiagentDBVersion,
+					dst,
+					plainHTTP,
+					skipTLSVerification,
+					username,
+					password,
+				)
+				if err != nil {
+					return err
+				}
+
 			default:
 				slog.LogAttrs(
 					ctx,
@@ -238,6 +279,11 @@ func needsUpdate(dir string, typ string) (bool, error) {
 	if typ == "clamav" {
 		dbFile = filepath.Join("clamav", "main.cvd")
 	}
+
+	if typ == "aiagent" {
+		dbFile = filepath.Join("aiagent", "aiagentscan.json")
+	}
+
 	dbFile = filepath.Join(dir, dbFile)
 	info, err := os.Stat(dbFile)
 	if err != nil {

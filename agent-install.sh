@@ -197,7 +197,8 @@ setup_env() {
     TOKEN_FILE="$(filepath_join "$OMNI_HOME_DIR" artifact.tok)"
     FILE_UNINSTALL_SCRIPT="$(filepath_join \
         "$OMNI_INSTALL_PATH" omni-uninstall.sh)"
-    DB_DOWNLOAD_CMD_EXEC="db download vuln java$(quote_indent \
+
+    DB_DOWNLOAD_CMD_EXEC="db download vuln java aiagent$(quote_indent \
         --vuln-db-repository="$OMNI_VULN_DB_REPOSITORY" \
         --java-db-repository="$OMNI_JAVA_DB_REPOSITORY" \
         --destination="$OMNI_HOME_DIR")"
@@ -392,14 +393,18 @@ create_launchd_plist() {
         echo '<plist version="1.0">'
         echo '<dict>'
         echo '  <key>Label</key>'
-        printf '  <string>%s</string>\n' "$(xml_escape "$LAUNCHD_LABEL")"
+        printf '  <string>%s</string>\n' \
+            "$(xml_escape "$LAUNCHD_LABEL")"
+
         echo '  <key>ProgramArguments</key>'
         echo '  <array>'
         printf '    <string>%s</string>\n' \
             "$(xml_escape "$FILE_OMNI_RUNNER")"
         echo '  </array>'
         echo '  <key>WorkingDirectory</key>'
-        printf '  <string>%s</string>\n' "$(xml_escape "$OMNI_HOME_DIR")"
+        printf '  <string>%s</string>\n' \
+            "$(xml_escape "$OMNI_HOME_DIR")"
+
         echo '  <key>EnvironmentVariables</key>'
         echo '  <dict>'
         echo '    <key>PATH</key>'
@@ -431,9 +436,13 @@ create_launchd_plist() {
         printf '    <integer>%s</integer>\n' "$memory"
         echo '  </dict>'
         echo '  <key>StandardOutPath</key>'
-        printf '  <string>%s</string>\n' "$(xml_escape "$FILE_OMNI_STDOUT")"
+        printf '  <string>%s</string>\n' \
+            "$(xml_escape "$FILE_OMNI_STDOUT")"
+
         echo '  <key>StandardErrorPath</key>'
-        printf '  <string>%s</string>\n' "$(xml_escape "$FILE_OMNI_STDERR")"
+        printf '  <string>%s</string>\n' \
+            "$(xml_escape "$FILE_OMNI_STDERR")"
+
         echo '</dict>'
         echo '</plist>'
     } | $SUDO tee "$FILE_OMNI_PLIST" >/dev/null
